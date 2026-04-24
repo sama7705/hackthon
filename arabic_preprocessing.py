@@ -1,4 +1,5 @@
 import re
+import ast
 import pandas as pd
 
 # Arabic diacritics (tashkeel)
@@ -58,7 +59,90 @@ def add_clean_text_column(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+ASPECTS = [
+    "food",
+    "service",
+    "price",
+    "cleanliness",
+    "delivery",
+    "ambiance",
+    "app_experience",
+    "general",
+]
+
+SENTIMENT_TO_LABEL = {
+    "positive": 1,
+    "negative": 2,
+    "neutral": 3,
+}
+
+
+def safe_literal_parse(value, default):
+    """Safely parse a Python-literal-like string.
+
+    Returns `default` when parsing fails or when value type does not match `default` type.
+    """
+    expected_type = type(default)
+    if isinstance(value, expected_type):
+        return value
+    if pd.isna(value):
+        return default
+    if not isinstance(value, str):
+        return default
+
+    text = value.strip()
+    if not text:
+        return default
+
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return default
+
+    if isinstance(parsed, expected_type):
+        return parsed
+    return default
+
+
+def encode_aspect_labels(aspects_value, aspect_sentiments_value):
+    """Create encoded labels for fixed aspects.
+
+    Mapping:
+    0=none, 1=positive, 2=negative, 3=neutral
+    """
+    aspects = safe_literal_parse(aspects_value, default=[])
+    sentiments = safe_literal_parse(aspect_sentiments_value, default={})
+
+    aspect_set = {str(a).strip().lower() for a in aspects}
+    sentiment_map = {str(k).strip().lower(): str(v).strip().lower() for k, v in sentiments.items()}
+
+    labels = {aspect: 0 for aspect in ASPECTS}
+
+    for aspect in ASPECTS:
+        if aspect in aspect_set:
+            labels[aspect] = SENTIMENT_TO_LABEL.get(sentiment_map.get(aspect, ""), 0)
+
+    return labels
+
+
+def add_aspect_label_columns(
+    df: pd.DataFrame,
+    aspects_col: str = "aspects",
+    sentiments_col: str = "aspect_sentiments",
+) -> pd.DataFrame:
+    """Parse aspect columns safely and append encoded label columns."""
+    df = df.copy()
+    encoded = df.apply(
+        lambda row: encode_aspect_labels(row.get(aspects_col), row.get(sentiments_col)),
+        axis=1,
+    )
+    labels_df = pd.DataFrame(encoded.tolist(), index=df.index)
+    return pd.concat([df, labels_df], axis=1)
+
+
 # Example usage:
 # df = pd.read_csv("your_file.csv")
 # df = add_clean_text_column(df)
 # print(df[["review_text", "clean_text"]].head())
+# df = add_aspect_label_columns(df)
+# print(df[["food", "service", "price", "general"]].head())
