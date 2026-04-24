@@ -1,0 +1,1 @@
+"""Arabic ABSA backend package."""
