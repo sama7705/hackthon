@@ -13,6 +13,19 @@ LABEL_TO_SENTIMENT = {
     3: "neutral",
 }
 
+ALLOWED_ASPECTS = {
+    "food",
+    "service",
+    "price",
+    "cleanliness",
+    "delivery",
+    "ambiance",
+    "app_experience",
+    "general",
+    "none",
+}
+ALLOWED_SENTIMENTS = {"positive", "negative", "neutral"}
+
 
 def load_table(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
@@ -82,6 +95,100 @@ def build_submission(unlabeled_df: pd.DataFrame, models: dict) -> list[dict]:
         )
 
     return records
+
+
+def validate_submission(file_path, unlabeled_data) -> bool:
+    with open(file_path, "r", encoding="utf-8") as f:
+        submission = json.load(f)
+
+    errors = []
+
+    if not isinstance(submission, list):
+        print("Validation errors:")
+        print("- Submission root must be a list of prediction records.")
+        return False
+
+    if len(submission) != len(unlabeled_data):
+        errors.append(
+            f"Row count mismatch: submission has {len(submission)} rows, "
+            f"but unlabeled_data has {len(unlabeled_data)} rows."
+        )
+
+    if isinstance(unlabeled_data, pd.DataFrame):
+        expected_review_ids = set(unlabeled_data["review_id"].astype(int).tolist())
+    else:
+        expected_review_ids = {int(row["review_id"]) for row in unlabeled_data}
+
+    seen_review_ids = set()
+
+    for idx, row in enumerate(submission, start=1):
+        if not isinstance(row, dict):
+            errors.append(f"Row {idx}: each record must be an object/dict.")
+            continue
+
+        review_id = row.get("review_id")
+        aspects = row.get("aspects")
+        aspect_sentiments = row.get("aspect_sentiments")
+
+        if review_id is None:
+            errors.append(f"Row {idx}: missing 'review_id'.")
+        else:
+            try:
+                review_id = int(review_id)
+            except (TypeError, ValueError):
+                errors.append(f"Row {idx}: review_id '{review_id}' is not an integer.")
+            else:
+                seen_review_ids.add(review_id)
+                if review_id not in expected_review_ids:
+                    errors.append(
+                        f"Row {idx}: review_id {review_id} does not exist in unlabeled_data."
+                    )
+
+        if not isinstance(aspects, list):
+            errors.append(f"Row {idx}: 'aspects' must be a list.")
+            aspects = []
+
+        invalid_aspects = [a for a in aspects if a not in ALLOWED_ASPECTS]
+        if invalid_aspects:
+            errors.append(
+                f"Row {idx}: invalid aspects {invalid_aspects}. "
+                f"Allowed: {sorted(ALLOWED_ASPECTS)}."
+            )
+
+        if not isinstance(aspect_sentiments, dict):
+            errors.append(f"Row {idx}: 'aspect_sentiments' must be an object/dict.")
+            aspect_sentiments = {}
+
+        if set(aspect_sentiments.keys()) != set(aspects):
+            errors.append(
+                f"Row {idx}: aspect_sentiments keys {sorted(aspect_sentiments.keys())} "
+                f"must exactly match aspects {sorted(aspects)}."
+            )
+
+        invalid_sentiments = {
+            k: v for k, v in aspect_sentiments.items() if v not in ALLOWED_SENTIMENTS
+        }
+        if invalid_sentiments:
+            errors.append(
+                f"Row {idx}: invalid sentiments {invalid_sentiments}. "
+                f"Allowed: {sorted(ALLOWED_SENTIMENTS)}."
+            )
+
+    missing_review_ids = sorted(expected_review_ids - seen_review_ids)
+    if missing_review_ids:
+        errors.append(
+            f"Missing review_ids from submission: {missing_review_ids[:20]}"
+            + (" ..." if len(missing_review_ids) > 20 else "")
+        )
+
+    if errors:
+        print("Validation errors:")
+        for err in errors:
+            print(f"- {err}")
+        return False
+
+    print("Submission validation passed with no errors.")
+    return True
 
 
 def main() -> None:
