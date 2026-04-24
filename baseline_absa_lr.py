@@ -19,6 +19,36 @@ LABEL_NAMES = {
 }
 
 
+def add_domain_context_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Create `combined_text` by merging text with domain metadata."""
+    out = df.copy()
+
+    clean_text = (
+        out["clean_text"].fillna("").astype(str)
+        if "clean_text" in out.columns
+        else pd.Series([""] * len(out), index=out.index)
+    )
+    business_category = (
+        out["business_category"].fillna("unknown").astype(str)
+        if "business_category" in out.columns
+        else pd.Series(["unknown"] * len(out), index=out.index)
+    )
+    platform = (
+        out["platform"].fillna("unknown").astype(str)
+        if "platform" in out.columns
+        else pd.Series(["unknown"] * len(out), index=out.index)
+    )
+
+    out["combined_text"] = (
+        clean_text
+        + " business_category_"
+        + business_category.str.strip().str.lower().str.replace(r"\s+", "_", regex=True)
+        + " platform_"
+        + platform.str.strip().str.lower().str.replace(r"\s+", "_", regex=True)
+    )
+    return out
+
+
 def ensure_clean_text(df: pd.DataFrame) -> pd.DataFrame:
     """Use existing clean_text if available, otherwise create it from review_text."""
     if "clean_text" in df.columns:
@@ -39,12 +69,12 @@ def build_model() -> Pipeline:
             (
                 "word_tfidf",
                 TfidfVectorizer(analyzer="word", ngram_range=(1, 2), min_df=2),
-                "clean_text",
+                "combined_text",
             ),
             (
                 "char_tfidf",
                 TfidfVectorizer(analyzer="char", ngram_range=(3, 5), min_df=2),
-                "clean_text",
+                "combined_text",
             ),
         ],
         remainder="drop",
@@ -70,10 +100,10 @@ def evaluate_aspect(
         raise ValueError(f"Missing aspect label column: {aspect}")
 
     model = build_model()
-    X_train = train_df[["clean_text"]]
+    X_train = train_df[["combined_text"]]
     y_train = train_df[aspect].astype(int)
 
-    X_valid = valid_df[["clean_text"]]
+    X_valid = valid_df[["combined_text"]]
     y_valid = valid_df[aspect].astype(int)
 
     model.fit(X_train, y_train)
@@ -119,6 +149,8 @@ def main() -> None:
 
     train_df = ensure_clean_text(train_df)
     valid_df = ensure_clean_text(valid_df)
+    train_df = add_domain_context_column(train_df)
+    valid_df = add_domain_context_column(valid_df)
 
     all_true: list[int] = []
     all_pred: list[int] = []

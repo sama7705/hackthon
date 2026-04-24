@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from arabic_preprocessing import ASPECTS, add_aspect_label_columns, add_clean_text_column
-from baseline_absa_lr import build_model
+from baseline_absa_lr import add_domain_context_column, build_model
 
 LABEL_TO_SENTIMENT = {
     1: "positive",
@@ -47,7 +47,7 @@ def ensure_review_id(df: pd.DataFrame) -> pd.DataFrame:
 
 def train_models(train_df: pd.DataFrame):
     models = {}
-    X_train = train_df[["clean_text"]]
+    X_train = train_df[["combined_text"]]
 
     for aspect in ASPECTS:
         if aspect not in train_df.columns:
@@ -65,7 +65,7 @@ def train_models(train_df: pd.DataFrame):
 
 def build_submission(unlabeled_df: pd.DataFrame, models: dict) -> list[dict]:
     records = []
-    X_unlabeled = unlabeled_df[["clean_text"]]
+    X_unlabeled = unlabeled_df[["combined_text"]]
 
     predicted_per_aspect = {
         aspect: models[aspect].predict(X_unlabeled).astype(int) for aspect in ASPECTS
@@ -226,9 +226,11 @@ def main() -> None:
 
     train_df = load_table(Path(args.train))
     train_df = add_clean_text_column(train_df)
+    train_df = add_domain_context_column(train_df)
     train_df = add_aspect_label_columns(train_df)
 
     unlabeled_df = add_clean_text_column(unlabeled_df)
+    unlabeled_df = add_domain_context_column(unlabeled_df)
 
     models = train_models(train_df)
     submission = build_submission(unlabeled_df, models)
