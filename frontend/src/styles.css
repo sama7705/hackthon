@@ -161,6 +161,27 @@ body {
   background: rgba(7, 11, 18, 0.85);
 }
 
+.json-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 0.8rem;
+}
+
+.download-btn {
+  border: 1px solid var(--border);
+  background: rgba(22, 30, 50, 0.8);
+  color: var(--text);
+  padding: 0.55rem 0.9rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.download-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .steps {
   display: grid;
   gap: 0.5rem;
