@@ -97,29 +97,27 @@ def build_submission(unlabeled_df: pd.DataFrame, models: dict) -> list[dict]:
     return records
 
 
-def validate_submission(file_path, unlabeled_data) -> bool:
+def validate_submission(file_path: Path, unlabeled_data: pd.DataFrame) -> bool:
     with open(file_path, "r", encoding="utf-8") as f:
         submission = json.load(f)
 
-    errors = []
+    errors: list[str] = []
 
     if not isinstance(submission, list):
         print("Validation errors:")
         print("- Submission root must be a list of prediction records.")
         return False
 
+    expected_review_id_list = unlabeled_data["review_id"].astype(int).tolist()
+    expected_review_ids = set(expected_review_id_list)
+
     if len(submission) != len(unlabeled_data):
         errors.append(
             f"Row count mismatch: submission has {len(submission)} rows, "
-            f"but unlabeled_data has {len(unlabeled_data)} rows."
+            f"but test file has {len(unlabeled_data)} rows."
         )
 
-    if isinstance(unlabeled_data, pd.DataFrame):
-        expected_review_ids = set(unlabeled_data["review_id"].astype(int).tolist())
-    else:
-        expected_review_ids = {int(row["review_id"]) for row in unlabeled_data}
-
-    seen_review_ids = set()
+    seen_review_ids: set[int] = set()
 
     for idx, row in enumerate(submission, start=1):
         if not isinstance(row, dict):
@@ -138,10 +136,12 @@ def validate_submission(file_path, unlabeled_data) -> bool:
             except (TypeError, ValueError):
                 errors.append(f"Row {idx}: review_id '{review_id}' is not an integer.")
             else:
+                if review_id in seen_review_ids:
+                    errors.append(f"Row {idx}: duplicate review_id {review_id}.")
                 seen_review_ids.add(review_id)
                 if review_id not in expected_review_ids:
                     errors.append(
-                        f"Row {idx}: review_id {review_id} does not exist in unlabeled_data."
+                        f"Row {idx}: review_id {review_id} does not exist in test file."
                     )
 
         if not isinstance(aspects, list):
@@ -153,6 +153,11 @@ def validate_submission(file_path, unlabeled_data) -> bool:
             errors.append(
                 f"Row {idx}: invalid aspects {invalid_aspects}. "
                 f"Allowed: {sorted(ALLOWED_ASPECTS)}."
+            )
+
+        if "none" in aspects and len(aspects) > 1:
+            errors.append(
+                f"Row {idx}: 'none' aspect cannot be mixed with other aspects {aspects}."
             )
 
         if not isinstance(aspect_sentiments, dict):
@@ -176,10 +181,9 @@ def validate_submission(file_path, unlabeled_data) -> bool:
 
     missing_review_ids = sorted(expected_review_ids - seen_review_ids)
     if missing_review_ids:
-        errors.append(
-            f"Missing review_ids from submission: {missing_review_ids[:20]}"
-            + (" ..." if len(missing_review_ids) > 20 else "")
-        )
+        preview = missing_review_ids[:20]
+        suffix = " ..." if len(missing_review_ids) > 20 else ""
+        errors.append(f"Missing review_ids from submission: {preview}{suffix}")
 
     if errors:
         print("Validation errors:")
@@ -198,15 +202,32 @@ def main() -> None:
         "--unlabeled", default="DeepX_unlabeled.xlsx", help="Unlabeled table to predict"
     )
     parser.add_argument("--output", default="submission.json", help="Output JSON path")
+    parser.add_argument(
+        "--validate",
+        default=None,
+        help="Path to an existing submission JSON to validate against --unlabeled test file",
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Only validate --validate file and skip training/prediction",
+    )
     args = parser.parse_args()
 
-    train_df = load_table(Path(args.train))
     unlabeled_df = load_table(Path(args.unlabeled))
+    unlabeled_df = ensure_review_id(unlabeled_df)
 
+    if args.validate is not None:
+        is_valid = validate_submission(Path(args.validate), unlabeled_df)
+        if args.validate_only:
+            raise SystemExit(0 if is_valid else 1)
+    elif args.validate_only:
+        raise SystemExit("--validate-only requires --validate <submission.json>.")
+
+    train_df = load_table(Path(args.train))
     train_df = add_clean_text_column(train_df)
     train_df = add_aspect_label_columns(train_df)
 
-    unlabeled_df = ensure_review_id(unlabeled_df)
     unlabeled_df = add_clean_text_column(unlabeled_df)
 
     models = train_models(train_df)
@@ -216,6 +237,8 @@ def main() -> None:
         json.dump(submission, f, ensure_ascii=False, indent=2)
 
     print(f"Saved {len(submission)} predictions to {args.output}")
+
+    validate_submission(Path(args.output), unlabeled_df)
 
 
 if __name__ == "__main__":
