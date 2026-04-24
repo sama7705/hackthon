@@ -62,8 +62,10 @@ def build_model() -> Pipeline:
     return Pipeline([("features", features), ("clf", clf)])
 
 
-def evaluate_aspect(train_df: pd.DataFrame, valid_df: pd.DataFrame, aspect: str) -> None:
-    """Train one model per aspect and print metrics on validation data."""
+def evaluate_aspect(
+    train_df: pd.DataFrame, valid_df: pd.DataFrame, aspect: str
+) -> tuple[pd.Series, pd.Series]:
+    """Train one model per aspect, print metrics, and return labels for aggregate scoring."""
     if aspect not in train_df.columns or aspect not in valid_df.columns:
         raise ValueError(f"Missing aspect label column: {aspect}")
 
@@ -75,7 +77,7 @@ def evaluate_aspect(train_df: pd.DataFrame, valid_df: pd.DataFrame, aspect: str)
     y_valid = valid_df[aspect].astype(int)
 
     model.fit(X_train, y_train)
-    y_pred = model.predict(X_valid)
+    y_pred = pd.Series(model.predict(X_valid), index=y_valid.index)
 
     acc = accuracy_score(y_valid, y_pred)
     f1_macro = f1_score(y_valid, y_pred, average="macro", zero_division=0)
@@ -95,6 +97,8 @@ def evaluate_aspect(train_df: pd.DataFrame, valid_df: pd.DataFrame, aspect: str)
             zero_division=0,
         )
     )
+
+    return y_valid, y_pred
 
 
 def main() -> None:
@@ -116,8 +120,20 @@ def main() -> None:
     train_df = ensure_clean_text(train_df)
     valid_df = ensure_clean_text(valid_df)
 
+    all_true: list[int] = []
+    all_pred: list[int] = []
+
     for aspect in ASPECTS:
-        evaluate_aspect(train_df, valid_df, aspect)
+        y_true_aspect, y_pred_aspect = evaluate_aspect(train_df, valid_df, aspect)
+        all_true.extend(y_true_aspect.tolist())
+        all_pred.extend(y_pred_aspect.tolist())
+
+    micro_f1 = f1_score(all_true, all_pred, average="micro", zero_division=0)
+    print("=" * 80)
+    print(
+        "Global Micro F1 across all aspects (flattened labels): "
+        f"{micro_f1:.4f}"
+    )
 
 
 def load_table(path: Path) -> pd.DataFrame:
