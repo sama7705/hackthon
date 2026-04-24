@@ -4,6 +4,7 @@ from pathlib import Path
 
 import joblib
 import pandas as pd
+from scipy.sparse import hstack
 
 from arabic_preprocessing import ASPECTS, add_clean_text_column
 from baseline_absa_lr import add_domain_context_column
@@ -57,26 +58,37 @@ def load_models(models_dir: Path) -> dict:
         raise ValueError(f"Required aspects missing from ASPECTS config: {missing_in_config}")
 
     for aspect in REQUIRED_ASPECTS:
-        model_path = models_dir / f"{aspect}.joblib"
-        if not model_path.exists():
-            model_path = models_dir / f"{aspect}.pkl"
-        if not model_path.exists():
+        word_path = models_dir / f"{aspect}_word_tfidf.pkl"
+        char_path = models_dir / f"{aspect}_char_tfidf.pkl"
+        lr_path = models_dir / f"{aspect}_lr.pkl"
+
+        missing_paths = [str(p) for p in [word_path, char_path, lr_path] if not p.exists()]
+        if missing_paths:
             raise FileNotFoundError(
-                f"Could not find trained model for aspect '{aspect}'. "
-                f"Expected: {models_dir / f'{aspect}.joblib'} or {models_dir / f'{aspect}.pkl'}"
+                f"Missing model artifacts for aspect '{aspect}': {missing_paths}. "
+                "Train with baseline_absa_lr.py to generate these files."
             )
-        models[aspect] = joblib.load(model_path)
+
+        models[aspect] = {
+            "word_vectorizer": joblib.load(word_path),
+            "char_vectorizer": joblib.load(char_path),
+            "classifier": joblib.load(lr_path),
+        }
 
     return models
 
 
 def build_submission(unlabeled_df: pd.DataFrame, models: dict) -> list[dict]:
     records = []
-    X_unlabeled = unlabeled_df[["combined_text"]]
+    X_unlabeled = unlabeled_df["combined_text"].fillna("").astype(str)
 
-    predicted_per_aspect = {
-        aspect: models[aspect].predict(X_unlabeled).astype(int) for aspect in REQUIRED_ASPECTS
-    }
+    predicted_per_aspect = {}
+    for aspect in REQUIRED_ASPECTS:
+        model_bundle = models[aspect]
+        word_features = model_bundle["word_vectorizer"].transform(X_unlabeled)
+        char_features = model_bundle["char_vectorizer"].transform(X_unlabeled)
+        all_features = hstack([word_features, char_features], format="csr")
+        predicted_per_aspect[aspect] = model_bundle["classifier"].predict(all_features).astype(int)
 
     for pos, (_, row) in enumerate(unlabeled_df.iterrows()):
         review_id = int(row["review_id"])
@@ -209,7 +221,11 @@ def validate_submission(file_path, unlabeled_df) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate ABSA submission JSON from trained models")
     parser.add_argument("--unlabeled", default="DeepX_unlabeled.xlsx", help="Unlabeled table")
-    parser.add_argument("--models-dir", default="trained_models", help="Directory containing one model per aspect")
+    parser.add_argument(
+        "--models-dir",
+        default="models",
+        help="Directory containing fitted vectorizers and LR model per aspect",
+    )
     parser.add_argument("--output", default="submission.json", help="Output JSON path")
     args = parser.parse_args()
 

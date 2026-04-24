@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 
+import joblib
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -93,7 +94,10 @@ def build_model() -> Pipeline:
 
 
 def evaluate_aspect(
-    train_df: pd.DataFrame, valid_df: pd.DataFrame, aspect: str
+    train_df: pd.DataFrame,
+    valid_df: pd.DataFrame,
+    aspect: str,
+    models_dir: Path,
 ) -> tuple[pd.Series, pd.Series]:
     """Train one model per aspect, print metrics, and return labels for aggregate scoring."""
     if aspect not in train_df.columns or aspect not in valid_df.columns:
@@ -108,6 +112,7 @@ def evaluate_aspect(
 
     model.fit(X_train, y_train)
     y_pred = pd.Series(model.predict(X_valid), index=y_valid.index)
+    save_aspect_artifacts(model, aspect, models_dir)
 
     acc = accuracy_score(y_valid, y_pred)
     f1_macro = f1_score(y_valid, y_pred, average="macro", zero_division=0)
@@ -131,6 +136,20 @@ def evaluate_aspect(
     return y_valid, y_pred
 
 
+def save_aspect_artifacts(model: Pipeline, aspect: str, models_dir: Path) -> None:
+    """Save fitted vectorizers and logistic model for one aspect."""
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    features = model.named_steps["features"]
+    word_vectorizer = features.named_transformers_["word_tfidf"]
+    char_vectorizer = features.named_transformers_["char_tfidf"]
+    classifier = model.named_steps["clf"]
+
+    joblib.dump(word_vectorizer, models_dir / f"{aspect}_word_tfidf.pkl")
+    joblib.dump(char_vectorizer, models_dir / f"{aspect}_char_tfidf.pkl")
+    joblib.dump(classifier, models_dir / f"{aspect}_lr.pkl")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Baseline Arabic ABSA with TF-IDF + Logistic Regression"
@@ -139,10 +158,16 @@ def main() -> None:
     parser.add_argument(
         "--valid", required=True, help="Path to validation file (.csv or .xlsx)"
     )
+    parser.add_argument(
+        "--models-dir",
+        default="models",
+        help="Directory where fitted vectorizers and LR models will be saved",
+    )
     args = parser.parse_args()
 
     train_path = Path(args.train)
     valid_path = Path(args.valid)
+    models_dir = Path(args.models_dir)
 
     train_df = load_table(train_path)
     valid_df = load_table(valid_path)
@@ -156,7 +181,9 @@ def main() -> None:
     all_pred: list[int] = []
 
     for aspect in ASPECTS:
-        y_true_aspect, y_pred_aspect = evaluate_aspect(train_df, valid_df, aspect)
+        y_true_aspect, y_pred_aspect = evaluate_aspect(
+            train_df, valid_df, aspect, models_dir
+        )
         all_true.extend(y_true_aspect.tolist())
         all_pred.extend(y_pred_aspect.tolist())
 
@@ -166,6 +193,7 @@ def main() -> None:
         "Global Micro F1 across all aspects (flattened labels): "
         f"{micro_f1:.4f}"
     )
+    print(f"Saved model artifacts to: {models_dir.resolve()}")
 
 
 def load_table(path: Path) -> pd.DataFrame:
