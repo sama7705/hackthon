@@ -118,6 +118,94 @@ def assert_no_missing_review_ids(records: list[dict], source_df: pd.DataFrame) -
         )
 
 
+def validate_submission(file_path, unlabeled_df) -> None:
+    allowed_aspects = {
+        "food",
+        "service",
+        "price",
+        "cleanliness",
+        "delivery",
+        "ambiance",
+        "app_experience",
+        "general",
+        "none",
+    }
+    allowed_sentiments = {"positive", "negative", "neutral"}
+    errors = []
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        submission = json.load(f)
+
+    if len(submission) != len(unlabeled_df):
+        errors.append(
+            f"Row count mismatch: submission has {len(submission)} rows, "
+            f"unlabeled data has {len(unlabeled_df)} rows."
+        )
+
+    expected_review_ids = set(pd.to_numeric(unlabeled_df["review_id"], errors="coerce").dropna().astype(int))
+    submission_review_ids = set()
+
+    for i, row in enumerate(submission):
+        row_prefix = f"Row {i + 1}"
+
+        review_id = row.get("review_id")
+        try:
+            review_id = int(review_id)
+        except (TypeError, ValueError):
+            errors.append(f"{row_prefix}: review_id is invalid ({review_id}).")
+            review_id = None
+
+        if review_id is not None:
+            submission_review_ids.add(review_id)
+
+        aspects = row.get("aspects")
+        if not isinstance(aspects, list):
+            errors.append(f"{row_prefix}: aspects must be a list.")
+            aspects = []
+
+        aspect_sentiments = row.get("aspect_sentiments")
+        if not isinstance(aspect_sentiments, dict):
+            errors.append(f"{row_prefix}: aspect_sentiments must be a dictionary.")
+            aspect_sentiments = {}
+
+        if set(aspect_sentiments.keys()) != set(aspects):
+            errors.append(
+                f"{row_prefix}: keys in aspect_sentiments must exactly match aspects."
+            )
+
+        invalid_aspects = [a for a in aspects if a not in allowed_aspects]
+        if invalid_aspects:
+            errors.append(f"{row_prefix}: invalid aspects found: {invalid_aspects}.")
+
+        invalid_sentiments = [
+            sentiment for sentiment in aspect_sentiments.values() if sentiment not in allowed_sentiments
+        ]
+        if invalid_sentiments:
+            errors.append(f"{row_prefix}: invalid sentiments found: {invalid_sentiments}.")
+
+        if "none" in aspects and len(aspects) > 1:
+            errors.append(f"{row_prefix}: 'none' cannot appear with other aspects.")
+
+    missing_review_ids = sorted(expected_review_ids - submission_review_ids)
+    if missing_review_ids:
+        errors.append(
+            f"Missing review_ids in submission (first 20): {missing_review_ids[:20]}."
+        )
+
+    extra_review_ids = sorted(submission_review_ids - expected_review_ids)
+    if extra_review_ids:
+        errors.append(
+            f"Unknown review_ids in submission (first 20): {extra_review_ids[:20]}."
+        )
+
+    if errors:
+        print("Submission validation failed:")
+        for error in errors:
+            print(f"- {error}")
+    else:
+        print("Submission file is valid")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate ABSA submission JSON from trained models")
     parser.add_argument("--unlabeled", default="DeepX_unlabeled.xlsx", help="Unlabeled table")
